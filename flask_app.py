@@ -15,9 +15,9 @@ from flask_wtf.csrf import CSRFProtect
 
 load_dotenv()
 
- 
+# ============================================================
 # 1. CONFIGURATION
- 
+# ============================================================
 
 SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'votre_cle_secrete_par_defaut')
 
@@ -30,19 +30,19 @@ SESSION_CONFIG = dict(
 
 GITHUB_CLIENT_ID = os.environ.get('GITHUB_CLIENT_ID')
 GITHUB_CLIENT_SECRET = os.environ.get('GITHUB_CLIENT_SECRET')
-GITHUB_REDIRECT_URI = os.environ.get('GITHUB_REDIRECT_URI', 'url_de_redirection_par_defaut')
+GITHUB_REDIRECT_URI = os.environ.get('GITHUB_REDIRECT_URI', 'votre_domaine/callback')
 GITHUB_API_BASE_URL = "https://api.github.com"
 
 RECAPTCHA_SITE_KEY = os.environ.get('RECAPTCHA_SITE_KEY')
 RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 
-DB_PATH = os.environ.get('DB_PATH', 'chemin_vers_votre_base_de_donnees.db')
-BOTS_DIR = os.environ.get('BOTS_DIR', 'chemin_vers_votre_dossier_de_scripts')
+DB_PATH = os.environ.get('DB_PATH', 'che')
+BOTS_DIR = os.environ.get('BOTS_DIR', 'chemin/vers/vos/scripts')  # Répertoire des scripts .py
 
 MANUAL_ADMIN_ID = "MANUAL_ADMIN"
 MANUAL_ADMIN_USERNAME = "Administrateur"
-MANUAL_LOGIN_ID = "admin_id"
-MANUAL_LOGIN_PASS = "adminpass"  # À changer pour la sécurité !
+MANUAL_LOGIN_ID = "identifiant_admin"
+MANUAL_LOGIN_PASS = "mdp"
 
 API_KEY = SECRET_KEY
 
@@ -86,7 +86,6 @@ def get_text(key):
     return TRANSLATIONS.get(lang, TRANSLATIONS['fr']).get(key, key)
 
 
-# RECAPCHA VERIFICATION FUNCTION
 def verify_recaptcha(response):
     payload = {'secret': RECAPTCHA_SECRET_KEY, 'response': response}
     try:
@@ -96,9 +95,9 @@ def verify_recaptcha(response):
         return False
 
 
- 
+# ============================================================
 # 2. BASE DE DONNÉES
- 
+# ============================================================
 
 def get_db():
     """Connexion SQLite liée au contexte de la requête courante."""
@@ -197,9 +196,9 @@ def get_script_status(filename):
         return 1
 
 
- 
+# ============================================================
 # 3. DÉCORATEURS DE SÉCURITÉ
- 
+# ============================================================
 
 def require_api_key(f):
     """Vérifie que la requête (bot Discord) porte la bonne clé secrète."""
@@ -241,6 +240,14 @@ def check_role(required_roles):
             return f(*args, **kwargs)
         return decorated_function
     return decorator
+
+
+# ============================================================
+# 4. MOTEUR DE LANCEMENT DES SCRIPTS + PLANIFICATEUR
+# ============================================================
+# NOTE: la suppression AUTOMATIQUE des vieux logs a été retirée volontairement.
+# Le nettoyage des logs se fait désormais uniquement via le bouton
+# "Supprimer tous les logs" dans les Paramètres (voir admin.delete_all_logs).
 
 status = {
     "running": False, "process": None, "script_name": None,
@@ -328,9 +335,9 @@ def start_scheduler_thread():
     threading.Thread(target=scheduler_loop, daemon=True).start()
 
 
- 
+# ============================================================
 # 5. FABRIQUE DE L'APPLICATION FLASK
- 
+# ============================================================
 
 csrf = CSRFProtect()
 
