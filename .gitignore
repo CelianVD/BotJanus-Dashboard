@@ -1,13 +1,13 @@
-# Ignorer TOUS les sous-dossiers et leur contenu
-*/*/
+# Bloque TOUS les sous-dossiers à la racine
+/*/
 
-# Fichiers spécifiques à exclure à la racine
+# Fichiers spécifiques à bloquer
 throttle.ctrl
 *.lwp
 *.db
 user-config.py
 user-password.py
 
-# Ignorer tous les fichiers cachés (comme le .env) sauf le .gitignore
+# Bloque les fichiers cachés sauf .gitignore
 .*
 !.gitignore
