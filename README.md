@@ -73,20 +73,6 @@ lancement** (`dashboard.start_script`) et à chaque appel
 `/api/discord/permissions` côté bot Discord : il n'y a donc pas de cache de
 rôle à invalider si le statut wiki d'un utilisateur change.
 
-**Correctif appliqué dans cette révision** : le template `DASHBOARD_HTML`
-conditionnait l'affichage du formulaire de lancement à
-`role in ['Collaborateur', 'Admin']`, ce qui masquait le formulaire à un
-utilisateur `None` alors même que le serveur l'aurait autorisé à lancer un
-script s'il est autopatrolleur ailleurs. Le formulaire est maintenant affiché
-à tout utilisateur connecté (`session.get('user_id')`) ; le contrôle
-d'autorisation réel reste entièrement côté serveur dans
-`dashboard.start_script`, qui refuse et affiche un message (`flash`) si la
-vérification échoue. C'est cette route serveur qui fait foi, jamais l'UI.
-
-Aussi corrigé : `wiki_auth.AUTOPATROL_WIKI_CODES` contenait `"uk"` (aucune
-version Vikidia ukrainienne n'existe) et omettait `it`, `eu`, `ru`, `el`,
-`oc`. La liste couvre maintenant les 14 versions actives.
-
 ### 2.5 Décorateurs de sécurité (`flask_app.py`)
 
 - `login_required` : redirige vers `/` si pas de session.
@@ -102,8 +88,7 @@ obtenir une URL à usage unique, valable `DISCORD_LINK_TOKEN_TTL_MINUTES = 15`.
 L'utilisateur l'ouvre, se connecte via Vikidia si besoin (le token est gardé
 en session le temps du round-trip OAuth), puis confirme sur
 `/discord/link/<token>`. Le bot vérifie ensuite les droits via
-`GET /api/discord/permissions?discord_id=...`, qui applique exactement la
-même règle qu'en 2.4.
+`GET /api/discord/permissions?discord_id=...`.
 
 ## 3. Configuration — variables d'environnement
 
@@ -121,51 +106,7 @@ que de compter sur le répertoire de travail courant — important sur
 PythonAnywhere où le process WSGI ne démarre pas forcément avec le dossier du
 projet comme `cwd`.
 
-## 4. Rendre le dépôt public sur GitHub sans exposer de secrets
-
-1. Place `.env` à la racine du projet (même dossier que `flask_app.py`),
-   rempli à partir de `.env.example`. Ne le commite jamais (`.gitignore`
-   fourni couvre déjà `.env`, `*.db`, `__pycache__/`).
-2. Vérifie qu'aucun secret ne traîne ailleurs : recherche dans tout
-   l'historique git si le dépôt a déjà été poussé avec l'ancien
-   `MANUAL_LOGIN_PASS` ("janusdevikidia") ou l'ancien `FLASK_SECRET_KEY` en
-   clair — si oui, ces deux valeurs doivent être considérées compromises et
-   régénérées, même après suppression du fichier (elles resteraient dans
-   l'historique git tant qu'il n'est pas réécrit/purgé).
-3. Publie le dépôt avec `.env.example` (sans valeurs) comme seule référence
-   de configuration.
-
-## 5. Déploiement sur PythonAnywhere — faire du `.env` la seule source de vérité
-
-Le fichier `/var/www/<compte>_pythonanywhere_com_wsgi.py` (onglet **Web** →
-lien *WSGI configuration file*) ne doit contenir **aucun secret et aucune
-variable métier** — juste de quoi importer l'app Flask. Voir
-`wsgi_pythonanywhere_example.py` fourni : il se limite à ajouter le dossier du
-projet à `sys.path` puis `from flask_app import app as application`.
-
-Pourquoi c'est important : si l'ancien wsgi.py contient des lignes du type
-`os.environ['WIKI_OAUTH_CLIENT_SECRET'] = '...'`, ces valeurs sont déjà dans
-`os.environ` **avant** que `flask_app.py` n'appelle `load_dotenv()` — et par
-défaut, `load_dotenv()` ne réécrit pas une variable déjà présente dans
-l'environnement. Résultat : le `.env` semble ignoré, alors qu'en réalité c'est
-le wsgi.py qui "gagne" silencieusement. La solution n'est pas de forcer
-`override=True` (ça masquerait une absence de `.env` au lieu de la signaler) :
-c'est de **vider entièrement le wsgi.py de toute variable et tout secret**, et
-de laisser le `.env` être la seule source.
-
-Étapes :
-1. Ouvre `/var/www/janus_pythonanywhere_com_wsgi.py` et remplace tout son
-   contenu par celui de `wsgi_pythonanywhere_example.py` (adapte le `path`).
-2. Crée/édite `.env` directement dans le dossier du projet sur
-   PythonAnywhere (onglet **Files**), à partir de `.env.example`.
-3. Onglet **Web** → bouton **Reload** (obligatoire après toute modification
-   du `.env` ou du wsgi.py — le process ne relit rien tout seul).
-4. Vérifie dans l'onglet **Web** → **Error log** qu'aucun
-   `RuntimeError: variable d'environnement obligatoire '...' manquante`
-   n'apparaît au démarrage : cela confirmerait que le `.env` n'a pas été
-   trouvé (mauvais chemin, mauvais nom de fichier, oubli du Reload).
-
-## 6. Modèle de données (SQLite, `init_db`)
+## 4. Modèle de données (SQLite, `init_db`)
 
 - `users` (wiki_id PK, username, avatar, role, is_banned, lang, ban_reason,
   discord_id) — migration auto `github_id`→`wiki_id` depuis l'ancien système.
@@ -178,7 +119,7 @@ de laisser le `.env` être la seule source.
 - `messages` (id, wiki_id, username, content, date, is_read) — formulaire de
   contact.
 
-## 7. Lancement de scripts
+## 5. Lancement de scripts
 
 `launch_script_core` lance `python3 -u <script>` en sous-processus
 (`subprocess.Popen`), un seul à la fois (`status["running"]`). La sortie est
@@ -187,16 +128,3 @@ lue ligne à ligne dans un thread (`read_output`) et journalisée en base
 dernières lignes affichées). `/admin/scripts/toggle` permet de désactiver un
 script pour les non-admins (`script_config.is_active`), et
 `/admin/schedules` permet de planifier un lancement récurrent.
-
-## 8. Points de vigilance restants (non modifiés dans cette révision)
-
-- `SESSION_COOKIE_SECURE=True` est codé en dur : si le dashboard tourne un
-  jour en HTTP pur (pas de HTTPS), les cookies de session ne seront jamais
-  envoyés. Sur PythonAnywhere (HTTPS géré automatiquement), c'est correct
-  tel quel.
-- `MANUAL_LOGIN_PASS` protège un compte admin de secours ; comme tout mot de
-  passe statique, pense à le faire tourner régulièrement et à ne pas le
-  réutiliser ailleurs.
-- Les routes `/api/*` n'ont pas de limitation de débit (rate limiting) au-delà
-  de la vérification `X-API-Key` — à surveiller si le bot Discord est
-  exposé publiquement.
