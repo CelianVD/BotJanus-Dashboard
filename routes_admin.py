@@ -25,7 +25,7 @@ def admin_users():
 @admin_bp.route("/admin/update_user", methods=['POST'])
 @check_role([ROLE_ADMIN])
 def admin_update_user():
-    target_id = request.form.get('github_id')
+    target_id = request.form.get('wiki_id')
     new_role = request.form.get('new_role')
     action = request.form.get('action')
     reason = request.form.get('reason')
@@ -34,9 +34,9 @@ def admin_update_user():
         return redirect(url_for('admin.admin_users'))
     db = get_db()
     if action == 'ban':
-        db.execute("UPDATE users SET is_banned = 1, ban_reason = ? WHERE github_id = ?", (reason, target_id))
+        db.execute("UPDATE users SET is_banned = 1, ban_reason = ? WHERE wiki_id = ?", (reason, target_id))
     elif action == 'update' and new_role in [ROLE_NONE, ROLE_COLLAB, ROLE_ADMIN]:
-        db.execute("UPDATE users SET role = ? WHERE github_id = ?", (new_role, target_id,))
+        db.execute("UPDATE users SET role = ? WHERE wiki_id = ?", (new_role, target_id,))
     db.commit()
     return redirect(url_for('admin.admin_users'))
 
@@ -50,9 +50,9 @@ def backup_export():
     users = db.execute("SELECT * FROM users").fetchall()
     si = io.StringIO()
     cw = csv.writer(si, delimiter=';')
-    cw.writerow(['github_id', 'username', 'avatar', 'role', 'is_banned', 'lang', 'ban_reason'])
+    cw.writerow(['wiki_id', 'username', 'avatar', 'role', 'is_banned', 'lang', 'ban_reason'])
     for u in users:
-        cw.writerow([u['github_id'], u['username'], u['avatar'], u['role'], u['is_banned'], u['lang'], u['ban_reason']])
+        cw.writerow([u['wiki_id'], u['username'], u['avatar'], u['role'], u['is_banned'], u['lang'], u['ban_reason']])
     return Response(
         si.getvalue(),
         mimetype="text/csv",
@@ -77,7 +77,7 @@ def backup_import():
         count = 0
         for row in reader:
             if len(row) >= 6:
-                db.execute("""INSERT OR REPLACE INTO users (github_id, username, avatar, role, is_banned, lang, ban_reason)
+                db.execute("""INSERT OR REPLACE INTO users (wiki_id, username, avatar, role, is_banned, lang, ban_reason)
                               VALUES (?, ?, ?, ?, ?, ?, ?)""",
                            (row[0], row[1], row[2], row[3], int(row[4]), row[5], row[6] if len(row) > 6 else ""))
                 count += 1

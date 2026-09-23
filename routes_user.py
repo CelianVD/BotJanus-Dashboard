@@ -1,16 +1,17 @@
 import os
 import io
 import csv
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta
 
-import requests
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from flask import (Blueprint, render_template_string, redirect, url_for, request,
                     session, flash, jsonify, Response)
 
-from flask_app import (GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_REDIRECT_URI, GITHUB_API_BASE_URL,
-                  MANUAL_ADMIN_ID, MANUAL_ADMIN_USERNAME, MANUAL_LOGIN_ID, MANUAL_LOGIN_PASS,
+import wiki_auth
+from flask_app import (MANUAL_ADMIN_ID, MANUAL_ADMIN_USERNAME, MANUAL_LOGIN_ID, MANUAL_LOGIN_PASS,
+                  WIKI_ROOT_ADMIN_USERNAME,
                   ROLE_NONE, ROLE_COLLAB, ROLE_ADMIN, RECAPTCHA_SITE_KEY, BOTS_DIR,
                   get_db, get_text, verify_recaptcha, get_all_bots, get_script_status,
                   login_required, check_role, require_api_key, csrf, status,
@@ -50,7 +51,7 @@ def set_language(code):
     if 'user_id' in session:
         try:
             db = get_db()
-            db.execute("UPDATE users SET lang = ? WHERE github_id = ?", (code, session['user_id']))
+            db.execute("UPDATE users SET lang = ? WHERE wiki_id = ?", (code, session['user_id']))
             db.commit()
         except Exception:
             pass
@@ -68,9 +69,9 @@ def manual_login_post():
     password = request.form.get('password')
     if username == MANUAL_LOGIN_ID and password == MANUAL_LOGIN_PASS:
         db = get_db()
-        existing_lang = db.execute("SELECT lang FROM users WHERE github_id = ?", (MANUAL_ADMIN_ID,)).fetchone()
+        existing_lang = db.execute("SELECT lang FROM users WHERE wiki_id = ?", (MANUAL_ADMIN_ID,)).fetchone()
         current_lang = existing_lang['lang'] if existing_lang else 'fr'
-        db.execute("""INSERT OR REPLACE INTO users (github_id, username, avatar, role, is_banned, lang)
+        db.execute("""INSERT OR REPLACE INTO users (wiki_id, username, avatar, role, is_banned, lang)
                         VALUES (?, ?, ?, ?, 0, ?)""",
                    (MANUAL_ADMIN_ID, MANUAL_ADMIN_USERNAME,
                     "https://ui-avatars.com/api/?name=Admin+Bot&background=ff0000&color=fff", ROLE_ADMIN, current_lang))
@@ -86,51 +87,105 @@ def manual_login_post():
 
 
 @auth_bp.route("/login")
-def login_github():
-    github_auth_url = (f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}"
-                        f"&redirect_uri={GITHUB_REDIRECT_URI}&scope=user:email")
-    return redirect(github_auth_url)
+def login_wiki():
+    # Si une liaison Discord est en cours (voir /discord/link/<token>), on la garde
+    # en session le temps du round-trip OAuth pour la reprendre après connexion.
+    verifier, challenge = wiki_auth.generate_pkce_pair()
+    state = secrets.token_urlsafe(24)
+    session['wiki_oauth_state'] = state
+    session['wiki_oauth_verifier'] = verifier
+    return redirect(wiki_auth.build_authorize_url(state, challenge))
 
 
-@auth_bp.route("/callback")
+@auth_bp.route("/oauth/wiki/callback")
 @csrf.exempt
-def callback():
+def callback_wiki():
     code = request.args.get('code')
-    if not code:
+    state = request.args.get('state')
+    expected_state = session.pop('wiki_oauth_state', None)
+    verifier = session.pop('wiki_oauth_verifier', None)
+
+    if not code or not state or not verifier or state != expected_state:
+        flash("Échec de la connexion Vikidia (état invalide).")
         return redirect(url_for('dashboard.index'))
-    data = {'client_id': GITHUB_CLIENT_ID, 'client_secret': GITHUB_CLIENT_SECRET, 'code': code}
-    try:
-        r = requests.post('https://github.com/login/oauth/access_token', data=data, headers={'Accept': 'application/json'})
-        token_data = r.json()
-        if 'access_token' not in token_data:
+
+    token_data = wiki_auth.exchange_code_for_token(code, verifier)
+    if not token_data:
+        flash("Échec de la connexion Vikidia (échange du code impossible).")
+        return redirect(url_for('dashboard.index'))
+
+    profile = wiki_auth.fetch_profile(token_data['access_token'])
+    if not profile:
+        flash("Échec de la connexion Vikidia (profil introuvable).")
+        return redirect(url_for('dashboard.index'))
+
+    wiki_id = str(profile.get('sub') or profile.get('id') or profile['username'])
+    username = profile['username']
+    avatar_url = f"https://ui-avatars.com/api/?name={username}&background=0093E9&color=fff"
+
+    db = get_db()
+    existing_user = db.execute("SELECT * FROM users WHERE wiki_id = ?", (wiki_id,)).fetchone()
+    role, lang = ROLE_NONE, 'fr'
+    if username == WIKI_ROOT_ADMIN_USERNAME:
+        role = ROLE_ADMIN
+
+    if existing_user:
+        role, lang = existing_user['role'], existing_user['lang'] or 'fr'
+        if existing_user['is_banned']:
+            flash(f"Compte banni. Raison : {existing_user['ban_reason'] or 'Non spécifiée'}")
             return redirect(url_for('dashboard.index'))
 
-        r_user = requests.get(f"{GITHUB_API_BASE_URL}/user", headers={'Authorization': f"Bearer {token_data['access_token']}"})
-        user_info = r_user.json()
-        github_id, username = str(user_info['id']), user_info['login']
-        avatar_url = user_info.get('avatar_url', 'https://avatars.githubusercontent.com/u/0?v=4')
+    db.execute("""INSERT OR REPLACE INTO users (wiki_id, username, avatar, role, is_banned, lang, ban_reason, discord_id)
+                  VALUES (?, ?, ?, ?, COALESCE((SELECT is_banned FROM users WHERE wiki_id=?), 0), ?,
+                          (SELECT ban_reason FROM users WHERE wiki_id=?),
+                          (SELECT discord_id FROM users WHERE wiki_id=?))""",
+               (wiki_id, username, avatar_url, role, wiki_id, lang, wiki_id, wiki_id))
+    db.commit()
 
-        db = get_db()
-        existing_user = db.execute("SELECT * FROM users WHERE github_id = ?", (github_id,)).fetchone()
-        role, lang = ROLE_NONE, 'fr'
-        if username == "janus":
-            role = ROLE_ADMIN
+    session['user_id'], session['username'], session['lang'] = wiki_id, username, lang
 
-        if existing_user:
-            role, lang = existing_user['role'], existing_user['lang'] or 'fr'
-            if existing_user['is_banned']:
-                return redirect(url_for('dashboard.index'))
+    # Reprise d'une liaison Discord démarrée avant la connexion (/discord/link/<token>).
+    pending_token = session.pop('pending_discord_link', None)
+    if pending_token:
+        return redirect(url_for('auth.discord_link_confirm', token=pending_token))
 
-        db.execute("""INSERT OR REPLACE INTO users (github_id, username, avatar, role, is_banned, lang, ban_reason)
-                      VALUES (?, ?, ?, ?, COALESCE((SELECT is_banned FROM users WHERE github_id=?), 0), ?,
-                              (SELECT ban_reason FROM users WHERE github_id=?))""",
-                   (github_id, username, avatar_url, role, github_id, lang, github_id))
-        db.commit()
+    return redirect(url_for('dashboard.index'))
 
-        session['user_id'], session['username'], session['lang'] = github_id, username, lang
+
+# ============================================================
+# LIAISON DE COMPTE DISCORD <-> VIKIDIA
+# ============================================================
+# Le robot Discord appelle POST /api/discord/link/start pour obtenir une URL à usage
+# unique. L'utilisateur l'ouvre, se connecte via Vikidia OAuth si besoin, puis confirme
+# la liaison ici. Ensuite, GET /api/discord/permissions?discord_id=... permet au robot
+# de vérifier les droits (voir auth_check.py côté bot).
+
+DISCORD_LINK_TOKEN_TTL_MINUTES = 15
+
+
+@auth_bp.route("/discord/link/<token>")
+def discord_link_confirm(token):
+    db = get_db()
+    link = db.execute("SELECT * FROM discord_links WHERE token = ?", (token,)).fetchone()
+    if not link or link['used']:
+        flash("Ce lien de liaison Discord est invalide ou a déjà été utilisé.")
         return redirect(url_for('dashboard.index'))
-    except Exception:
+
+    created_at = datetime.strptime(link['created_at'], "%Y-%m-%d %H:%M:%S")
+    if datetime.now() - created_at > timedelta(minutes=DISCORD_LINK_TOKEN_TTL_MINUTES):
+        flash("Ce lien de liaison Discord a expiré, relance /auth sur Discord.")
         return redirect(url_for('dashboard.index'))
+
+    if 'user_id' not in session:
+        # On garde le token en session pour reprendre la liaison juste après le login.
+        session['pending_discord_link'] = token
+        return redirect(url_for('auth.login_wiki'))
+
+    db.execute("UPDATE users SET discord_id = ? WHERE wiki_id = ?", (link['discord_id'], session['user_id']))
+    db.execute("UPDATE discord_links SET used = 1 WHERE token = ?", (token,))
+    db.commit()
+    flash(f"Compte Discord ({link['discord_username']}) lié avec succès à votre compte Vikidia.")
+    return redirect(url_for('auth.account'))
 
 
 @auth_bp.route("/logout")
@@ -143,7 +198,7 @@ def logout():
 @login_required
 def account():
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE github_id = ?", (session['user_id'],)).fetchone()
+    user = db.execute("SELECT * FROM users WHERE wiki_id = ?", (session['user_id'],)).fetchone()
     return render_template_string(ACCOUNT_HTML, user=user, glass_css=GLASS_CSS)
 
 
@@ -158,7 +213,7 @@ def index():
     locked = row['value'] if row else '0'
     user_role = ROLE_NONE
     if 'user_id' in session:
-        u = db.execute("SELECT role FROM users WHERE github_id=?", (session['user_id'],)).fetchone()
+        u = db.execute("SELECT role FROM users WHERE wiki_id=?", (session['user_id'],)).fetchone()
         if u:
             user_role = u['role']
 
@@ -177,11 +232,23 @@ def index():
 
 
 @dashboard_bp.route("/start", methods=["POST"])
-@check_role([ROLE_COLLAB, ROLE_ADMIN])
+@login_required
 def start_script():
     db = get_db()
     locked_val = db.execute("SELECT value FROM settings WHERE key='lock_launch'").fetchone()['value']
-    user = db.execute("SELECT role FROM users WHERE github_id=?", (session['user_id'],)).fetchone()
+    user = db.execute("SELECT * FROM users WHERE wiki_id=?", (session['user_id'],)).fetchone()
+
+    if not user or user['is_banned']:
+        flash("Compte banni.")
+        return redirect(url_for('dashboard.index'))
+
+    if user['role'] not in (ROLE_COLLAB, ROLE_ADMIN):
+        # Rôle "None" : vérification en direct du statut Autopatrolleur sur au moins
+        # une des versions linguistiques de Vikidia prises en charge. Aucune promotion
+        # de rôle n'est enregistrée en base : le contrôle est refait à chaque lancement.
+        if not wiki_auth.is_autopatrolled_anywhere(user['username']):
+            flash(get_text('error_not_autopatrolled'))
+            return redirect(url_for('dashboard.index'))
 
     if locked_val == '1' and user['role'] != ROLE_ADMIN:
         flash("Verrouillé par l'Admin.")
@@ -344,7 +411,7 @@ def status_json():
     locked = row['value'] if row else '0'
     user_role = ROLE_NONE
     if 'user_id' in session:
-        u = db.execute("SELECT role FROM users WHERE github_id=?", (session['user_id'],)).fetchone()
+        u = db.execute("SELECT role FROM users WHERE wiki_id=?", (session['user_id'],)).fetchone()
         if u:
             user_role = u['role']
     return jsonify({
@@ -414,3 +481,59 @@ def api_scripts():
 @api_bp.route("/api/live_logs")
 def live_logs():
     return "\n".join([f"<div>{line}</div>" for line in status["live_output"][-100:]])
+
+
+# ============================================================
+# API DISCORD — LIAISON DE COMPTE & PERMISSIONS (utilisées par auth_check.py côté bot)
+# ============================================================
+
+@api_bp.route('/api/discord/link/start', methods=['POST'])
+@csrf.exempt
+@require_api_key
+def api_discord_link_start():
+    data = request.get_json(silent=True) or {}
+    discord_id = data.get('discord_id')
+    discord_username = data.get('discord_username', 'Discord')
+    if not discord_id:
+        return jsonify({"error": "Paramètre 'discord_id' manquant"}), 400
+
+    token = secrets.token_urlsafe(24)
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db = get_db()
+    db.execute(
+        "INSERT INTO discord_links (token, discord_id, discord_username, created_at, used) VALUES (?, ?, ?, ?, 0)",
+        (token, str(discord_id), discord_username, created_at)
+    )
+    db.commit()
+    return jsonify({"url": url_for('auth.discord_link_confirm', token=token, _external=True)}), 200
+
+
+@api_bp.route('/api/discord/permissions', methods=['GET'])
+@csrf.exempt
+@require_api_key
+def api_discord_permissions():
+    discord_id = request.args.get('discord_id')
+    if not discord_id:
+        return jsonify({"error": "Paramètre 'discord_id' manquant"}), 400
+
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE discord_id = ?", (str(discord_id),)).fetchone()
+    if not user:
+        return jsonify({"linked": False, "authorized": False, "reason": "not_linked"})
+
+    if user['is_banned']:
+        return jsonify({"linked": True, "authorized": False, "reason": "banned",
+                         "username": user['username']})
+
+    if user['role'] in (ROLE_COLLAB, ROLE_ADMIN):
+        return jsonify({"linked": True, "authorized": True, "role": user['role'],
+                         "username": user['username']})
+
+    # Rôle "None" lié : même règle que sur le dashboard web, vérification en direct
+    # (aucune promotion de rôle enregistrée).
+    if wiki_auth.is_autopatrolled_anywhere(user['username']):
+        return jsonify({"linked": True, "authorized": True, "role": ROLE_NONE,
+                         "via": "autopatrol", "username": user['username']})
+
+    return jsonify({"linked": True, "authorized": False, "reason": "not_autopatrolled",
+                     "username": user['username']})

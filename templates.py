@@ -101,7 +101,7 @@ DASHBOARD_HTML = """
                    <a href="{{ url_for('admin.admin_users') }}" class="btn btn-danger">{{ t('settings') }}</a>
                 {% endif %}
             {% else %}
-                <a href="{{ url_for('auth.login_github') }}" class="btn btn-github">{{ t('login_github') }}</a>
+                <a href="{{ url_for('auth.login_wiki') }}" class="btn btn-github">{{ t('login_wiki') }}</a>
                 <a href="{{ url_for('auth.manual_login_page') }}" class="btn btn-manual">{{ t('login_manual') }}</a>
             {% endif %}
         </div>
@@ -119,7 +119,13 @@ DASHBOARD_HTML = """
                 <p><em>{{ t('script_running') }}</em></p>
             {% endif %}
         {% else %}
-            {% if role in ['Collaborateur', 'Admin'] %}
+            {% if session.get('user_id') %}
+                {# Le rôle stocké en base ne suffit pas à décider : un compte "None" peut
+                   quand même lancer un script s'il est autopatrolleur/patrouilleur/admin/
+                   bureaucrate sur au moins un wiki Vikidia. Ce contrôle live est refait
+                   côté serveur dans dashboard.start_script (voir wiki_auth.is_autopatrolled_anywhere).
+                   On affiche donc le formulaire à tout utilisateur connecté ; un refus
+                   éventuel remonte via flash() après la tentative de lancement. #}
                 {% if locked == '1' and role != 'Admin' %}
                     <div style="background: rgba(255,0,0,0.2); padding: 15px; border-radius: 10px;">{{ t('locked_msg') }}</div>
                 {% else %}
@@ -652,18 +658,18 @@ ADMIN_USERS_HTML = """
                     <td><b>{{ u.username }}</b></td>
                     <td><span class="user-tag role-{{ u.role }}">{{ u.role }}</span></td>
                     <td>
-                        <form action="{{ url_for('admin.admin_update_user') }}" method="POST" id="form-{{ u.github_id }}" style="display:flex; gap:5px;">
+                        <form action="{{ url_for('admin.admin_update_user') }}" method="POST" id="form-{{ u.wiki_id }}" style="display:flex; gap:5px;">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                            <input type="hidden" name="github_id" value="{{ u.github_id }}">
-                            <input type="hidden" name="reason" id="reason-{{ u.github_id }}" value="">
-                            <input type="hidden" name="action" id="action-{{ u.github_id }}" value="update">
+                            <input type="hidden" name="wiki_id" value="{{ u.wiki_id }}">
+                            <input type="hidden" name="reason" id="reason-{{ u.wiki_id }}" value="">
+                            <input type="hidden" name="action" id="action-{{ u.wiki_id }}" value="update">
                             <select name="new_role" style="padding:5px;">
                                 <option value="None" {{ 'selected' if u.role == 'None' else '' }}>None</option>
                                 <option value="Collaborateur" {{ 'selected' if u.role == 'Collaborateur' else '' }}>Collaborateur</option>
                                 <option value="Admin" {{ 'selected' if u.role == 'Admin' else '' }}>Admin</option>
                             </select>
                             <button type="submit" class="btn btn-nav" style="padding:5px 10px; margin:0; font-size:0.8em;">{{ t('update') }}</button>
-                            <button type="button" onclick="confirmBan('{{ u.github_id }}', '{{ u.username }}')" class="btn btn-danger" style="padding:5px 10px; margin:0; font-size:0.8em;">{{ t('ban') }}</button>
+                            <button type="button" onclick="confirmBan('{{ u.wiki_id }}', '{{ u.username }}')" class="btn btn-danger" style="padding:5px 10px; margin:0; font-size:0.8em;">{{ t('ban') }}</button>
                         </form>
                     </td>
                 </tr>

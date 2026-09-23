@@ -1,0 +1,26 @@
+# langs.txt — Versions linguistiques de Vikidia
+#
+# Format : code_wiki;nom_français;sous-domaine
+# Ce fichier sert de référence pour BotJanus (vérification autopatrol multi-wikis
+# dans wiki_auth.py, et pour tout sélecteur de langue côté scripts, ex. portal.py
+# lancé avec --lang). Les codes correspondent au sous-domaine *.vikidia.org.
+#
+# Source : fr.vikidia.org/wiki/Vikidia (infobox "Langue(s)"), sept. 2026.
+# À maintenir à jour si une nouvelle version linguistique est ouverte ou fermée.
+
+fr;Français;fr.vikidia.org
+en;Anglais;en.vikidia.org
+es;Espagnol;es.vikidia.org
+it;Italien;it.vikidia.org
+de;Allemand;de.vikidia.org
+ca;Catalan;ca.vikidia.org
+eu;Basque;eu.vikidia.org
+ru;Russe;ru.vikidia.org
+scn;Sicilien;scn.vikidia.org
+el;Grec;el.vikidia.org
+hy;Arménien;hy.vikidia.org
+pt;Portugais;pt.vikidia.org
+oc;Occitan;oc.vikidia.org
+ar;Arabe;ar.vikidia.org
+uk;Ukrainien;uk.vikidia.org
+

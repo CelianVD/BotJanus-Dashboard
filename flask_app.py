@@ -13,13 +13,34 @@ from dotenv import load_dotenv
 from flask import Flask, g, request, session, redirect, url_for, flash, jsonify
 from flask_wtf.csrf import CSRFProtect
 
-load_dotenv()
+# Charge le .env en donnant un chemin ABSOLU (basé sur ce fichier), plutôt que de
+# compter sur le répertoire de travail courant. Sur PythonAnywhere, le process WSGI
+# ne démarre pas forcément avec le dossier du projet comme cwd, donc load_dotenv()
+# sans argument peut échouer silencieusement et laisser os.environ.get() retomber
+# sur les valeurs par défaut (ou None) sans que rien ne le signale.
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(_ENV_PATH)
 
 # ============================================================
 # 1. CONFIGURATION
 # ============================================================
 
-SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'votre_cle_secrete_par_defaut')
+
+def _require_env(name: str) -> str:
+    """Lit une variable d'environnement obligatoire ou arrête l'appli au démarrage
+    plutôt que de continuer avec un secret par défaut codé en dur (dangereux dès que
+    le code est public sur GitHub)."""
+    val = os.environ.get(name)
+    if not val:
+        raise RuntimeError(
+            f"flask_app : variable d'environnement obligatoire '{name}' manquante ou vide. "
+            f"Vérifie le fichier .env (voir .env.example) et, sur PythonAnywhere, pense à "
+            f"recharger l'appli web après toute modification."
+        )
+    return val
+
+
+SECRET_KEY = _require_env('FLASK_SECRET_KEY')
 
 SESSION_CONFIG = dict(
     SESSION_COOKIE_HTTPONLY=True,
@@ -28,23 +49,38 @@ SESSION_CONFIG = dict(
     PERMANENT_SESSION_LIFETIME=timedelta(minutes=60)
 )
 
-GITHUB_CLIENT_ID = os.environ.get('GITHUB_CLIENT_ID')
-GITHUB_CLIENT_SECRET = os.environ.get('GITHUB_CLIENT_SECRET')
-GITHUB_REDIRECT_URI = os.environ.get('GITHUB_REDIRECT_URI', 'votre_domaine/callback')
-GITHUB_API_BASE_URL = "https://api.github.com"
+# --- Authentification Vikidia OAuth2 (remplace l'ancien système GitHub) ---
+WIKI_OAUTH_CLIENT_ID = os.environ.get('WIKI_OAUTH_CLIENT_ID')
+WIKI_OAUTH_CLIENT_SECRET = os.environ.get('WIKI_OAUTH_CLIENT_SECRET')
+WIKI_OAUTH_CALLBACK = os.environ.get('WIKI_OAUTH_CALLBACK', 'votre_domaine/oauth/wiki/callback')
+
+# Nom d'utilisateur Vikidia considéré comme admin racine dès la première connexion
+# (équivalent de l'ancien check username == "janus" pour GitHub).
+WIKI_ROOT_ADMIN_USERNAME = os.environ.get('WIKI_ROOT_ADMIN_USERNAME', 'Janus')
 
 RECAPTCHA_SITE_KEY = os.environ.get('RECAPTCHA_SITE_KEY')
 RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 
 DB_PATH = os.environ.get('DB_PATH', 'che')
-BOTS_DIR = os.environ.get('BOTS_DIR', 'chemin/vers/vos/scripts')  # Répertoire des scripts .py
+BOTS_DIR = os.environ.get('BOTS_DIR')  # Répertoire des scripts .py — doit être défini dans .env
+if not BOTS_DIR:
+    raise RuntimeError(
+        "flask_app : la variable d'environnement 'BOTS_DIR' est manquante. "
+        "Définis-la dans .env (voir .env.example), ex : BOTS_DIR=/home/Janus/bots"
+    )
 
+# Compte de secours (accès admin manuel hors OAuth Vikidia, ex. en cas de souci
+# avec le fournisseur OAuth). Identifiant et mot de passe DOIVENT venir du .env :
+# aucune valeur par défaut n'est fournie ici pour que le dépôt puisse être public.
 MANUAL_ADMIN_ID = "MANUAL_ADMIN"
 MANUAL_ADMIN_USERNAME = "Administrateur"
-MANUAL_LOGIN_ID = "identifiant_admin"
-MANUAL_LOGIN_PASS = "mdp"
+MANUAL_LOGIN_ID = os.environ.get('MANUAL_LOGIN_ID', 'Administrateur')
+MANUAL_LOGIN_PASS = _require_env('MANUAL_LOGIN_PASS')
 
-API_KEY = SECRET_KEY
+# Clé utilisée par le bot Discord pour appeler les routes /api/* (header X-API-Key).
+# Séparée de FLASK_SECRET_KEY : ce sont deux secrets à des fins différentes, les
+# confondre veut dire qu'une fuite de l'un expose l'autre.
+API_KEY = _require_env('API_KEY')
 
 ROLE_NONE = "None"
 ROLE_COLLAB = "Collaborateur"
@@ -55,7 +91,7 @@ TRANSLATIONS = {
         'status_running': '🟢 EN COURS : ', 'status_stopped': '🔴 Arrêté', 'btn_stop': 'Arrêter BotJanus',
         'btn_start': 'DÉMARRER', 'script_running': 'Script en cours d\'exécution.', 'login_required': 'Connectez-vous pour lancer des scripts.',
         'locked_msg': '⛔ Lancement verrouillé par l\'administrateur.', 'console': 'Console', 'history': '📂 Historique',
-        'my_account': '👤 Mon Compte', 'settings': '🛠 Paramètres', 'login_github': 'Connexion GitHub',
+        'my_account': '👤 Mon Compte', 'settings': '🛠 Paramètres', 'login_wiki': 'Connexion Vikidia',
         'login_manual': 'Connexion Admin', 'logout': 'Se déconnecter', 'back': 'Retour', 'welcome': 'Bienvenue',
         'actions': 'Actions', 'banned': 'BANNI', 'ban': 'Bannir', 'unban': 'Débannir', 'update': 'Maj',
         'save': 'Enregistrer', 'users_roles': 'Utilisateurs & Rôles', 'system_settings': 'Paramètres Système',
@@ -63,20 +99,22 @@ TRANSLATIONS = {
         'login_title': 'Connexion Admin', 'username_ph': 'Identifiant', 'password_ph': 'Mot de passe',
         'connect_btn': 'Se connecter', 'lang_tag': 'Langue', 'role_tag': 'Rôle', 'days': 'jours',
         'error_auth': 'Erreur d\'authentification : Réservé à la connexion manuelle.', 'error_manual_login': 'Identifiants incorrects.',
-        'contact': '✉️ Contact', 'messages': '📩 Messages'
+        'contact': '✉️ Contact', 'messages': '📩 Messages',
+        'error_not_autopatrolled': "Accès refusé : votre compte Vikidia n'a pas le statut Autopatrolleur (ou supérieur) sur une des versions linguistiques prises en charge."
     },
     'en': {
         'status_running': '🟢 RUNNING: ', 'status_stopped': '🔴 Stopped', 'btn_stop': 'Stop BotJanus',
         'btn_start': 'START', 'script_running': 'Script is currently running.', 'login_required': 'Please login to start scripts.',
         'locked_msg': '⛔ Launch locked by administrator.', 'console': 'Console', 'history': '📂 History',
-        'my_account': '👤 My Account', 'settings': '🛠 Settings', 'login_github': 'GitHub Login',
+        'my_account': '👤 My Account', 'settings': '🛠 Settings', 'login_wiki': 'Login with Vikidia',
         'login_manual': 'Admin Login', 'logout': 'Logout', 'back': 'Back', 'welcome': 'Welcome',
         'actions': 'Actions', 'banned': 'BANNED', 'ban': 'Ban', 'unban': 'Unban', 'update': 'Update',
         'save': 'Save', 'users_roles': 'Users & Roles', 'system_settings': 'System Settings', 'security': 'Security',
         'lock_option': 'Lock launching (Admins only)', 'clean_logs': 'Clean Logs', 'login_title': 'Admin Login',
         'username_ph': 'Username', 'password_ph': 'Password', 'connect_btn': 'Connect', 'lang_tag': 'Language',
         'role_tag': 'Role', 'days': 'days', 'error_auth': 'Auth Error: Manual login only.', 'error_manual_login': 'Incorrect credentials.',
-        'contact': '✉️ Contact', 'messages': '📩 Messages'
+        'contact': '✉️ Contact', 'messages': '📩 Messages',
+        'error_not_autopatrolled': "Access denied: your Vikidia account does not have Autopatrolled status (or higher) on any supported language edition."
     }
 }
 
@@ -125,9 +163,23 @@ def init_db(app):
             db.execute('''CREATE TABLE IF NOT EXISTS settings (
                             key TEXT PRIMARY KEY, value TEXT)''')
             db.execute('''CREATE TABLE IF NOT EXISTS users (
-                            github_id TEXT PRIMARY KEY, username TEXT, avatar TEXT,
+                            wiki_id TEXT PRIMARY KEY, username TEXT, avatar TEXT,
                             role TEXT, is_banned INTEGER DEFAULT 0, lang TEXT DEFAULT 'fr',
-                            ban_reason TEXT)''')
+                            ban_reason TEXT, discord_id TEXT)''')
+            # Migration : l'ancienne base (auth GitHub) avait une colonne "github_id"
+            # à la place de "wiki_id", et pas de colonne "discord_id". On migre en
+            # place sans perdre les comptes existants (rôles, bannissements, etc.).
+            users_cols = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+            if "github_id" in users_cols and "wiki_id" not in users_cols:
+                db.execute("ALTER TABLE users RENAME COLUMN github_id TO wiki_id")
+                users_cols.discard("github_id")
+                users_cols.add("wiki_id")
+            if "discord_id" not in users_cols:
+                db.execute("ALTER TABLE users ADD COLUMN discord_id TEXT")
+            db.execute('''CREATE TABLE IF NOT EXISTS discord_links (
+                            token TEXT PRIMARY KEY, discord_id TEXT NOT NULL,
+                            discord_username TEXT, created_at TEXT NOT NULL,
+                            used INTEGER DEFAULT 0)''')
             db.execute('''CREATE TABLE IF NOT EXISTS script_config (
                             filename TEXT PRIMARY KEY, is_active INTEGER DEFAULT 1)''')
             db.execute('''CREATE TABLE IF NOT EXISTS schedules (
@@ -136,8 +188,11 @@ def init_db(app):
             # Table du formulaire de contact
             db.execute('''CREATE TABLE IF NOT EXISTS messages (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            github_id TEXT, username TEXT, content TEXT,
+                            wiki_id TEXT, username TEXT, content TEXT,
                             date TEXT, is_read INTEGER DEFAULT 0)''')
+            msg_cols = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
+            if "github_id" in msg_cols and "wiki_id" not in msg_cols:
+                db.execute("ALTER TABLE messages RENAME COLUMN github_id TO wiki_id")
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('lock_launch', '0')")
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('captcha_enabled', '0')")
             db.commit()
@@ -228,7 +283,7 @@ def check_role(required_roles):
             if 'user_id' not in session:
                 return redirect(url_for('dashboard.index'))
             db = get_db()
-            user = db.execute('SELECT * FROM users WHERE github_id = ?', (session['user_id'],)).fetchone()
+            user = db.execute('SELECT * FROM users WHERE wiki_id = ?', (session['user_id'],)).fetchone()
             if not user or user['is_banned']:
                 reason = user['ban_reason'] if user and user['ban_reason'] else "Non spécifiée"
                 session.clear()
@@ -361,7 +416,7 @@ def create_app():
 
     app.teardown_appcontext(close_connection)
 
-    EXEMPT_ENDPOINTS = {'auth.security_gate', 'auth.verify_gate', 'static', 'auth.callback', 'auth.login_github'}
+    EXEMPT_ENDPOINTS = {'auth.security_gate', 'auth.verify_gate', 'static', 'auth.callback_wiki', 'auth.login_wiki'}
 
     @app.before_request
     def check_security_gate():
@@ -380,7 +435,7 @@ def create_app():
         if session.get('user_id'):
             try:
                 db = get_db()
-                user = db.execute("SELECT role FROM users WHERE github_id=?", (session['user_id'],)).fetchone()
+                user = db.execute("SELECT role FROM users WHERE wiki_id=?", (session['user_id'],)).fetchone()
                 if user and user['role'] == ROLE_ADMIN:
                     unread_messages = get_unread_messages_count()
             except Exception:

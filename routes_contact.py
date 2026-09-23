@@ -20,7 +20,7 @@ def contact_form():
         db = get_db()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         db.execute(
-            "INSERT INTO messages (github_id, username, content, date, is_read) VALUES (?, ?, ?, ?, 0)",
+            "INSERT INTO messages (wiki_id, username, content, date, is_read) VALUES (?, ?, ?, ?, 0)",
             (session.get('user_id'), session.get('username'), content, timestamp)
         )
         db.commit()

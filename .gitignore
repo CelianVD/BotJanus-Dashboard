@@ -11,3 +11,4 @@ user-password.py
 # Bloque les fichiers cachés sauf .gitignore
 .*
 !.gitignore
+__pycache__/
