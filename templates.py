@@ -216,7 +216,7 @@ DASHBOARD_HTML = """
                 if (window.Notification && Notification.permission === "granted") {
                     new Notification("🤖 BotJanus - Script Terminé", {
                         body: "Le traitement du script '" + activeScriptName + "' s'est achevé.",
-                        icon: "https://ui-avatars.com/api/?name=Bot+Janus&background=0093E9&color=fff"
+                        icon: "{{ url_for('static', filename='avatar_botjanus.jpeg') }}"
                     });
                 }
             }
