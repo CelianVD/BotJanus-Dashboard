@@ -14,3 +14,6 @@ user-password.py
 __pycache__/
 __pycache__/
 logs_vikidia_auth.txt
+
+# Exception pour le dossier /static
+!/static/
