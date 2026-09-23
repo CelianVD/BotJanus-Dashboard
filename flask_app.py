@@ -100,7 +100,10 @@ TRANSLATIONS = {
         'connect_btn': 'Se connecter', 'lang_tag': 'Langue', 'role_tag': 'Rôle', 'days': 'jours',
         'error_auth': 'Erreur d\'authentification : Réservé à la connexion manuelle.', 'error_manual_login': 'Identifiants incorrects.',
         'contact': '✉️ Contact', 'messages': '📩 Messages',
-        'error_not_autopatrolled': "Accès refusé : votre compte Vikidia n'a pas le statut Autopatrolleur (ou supérieur) sur une des versions linguistiques prises en charge."
+        'error_not_autopatrolled': "Accès refusé : votre compte Vikidia n'a pas le statut Autopatrolleur (ou supérieur) sur une des versions linguistiques prises en charge.",
+        'promoted_msg': "✅ Statut Autopatrolleur détecté : vous êtes désormais Collaborateur. Script lancé.",
+        'error_wiki_check_failed': "Vérification impossible pour le moment : certains wikis Vikidia n'ont pas répondu. Réessayez dans un instant.",
+        'launch_hint': "Le lancement est réservé aux Collaborateurs. Au clic sur DÉMARRER, votre statut Autopatrolleur est vérifié sur Vikidia : s'il est trouvé, vous devenez Collaborateur automatiquement."
     },
     'en': {
         'status_running': '🟢 RUNNING: ', 'status_stopped': '🔴 Stopped', 'btn_stop': 'Stop BotJanus',
@@ -114,7 +117,10 @@ TRANSLATIONS = {
         'username_ph': 'Username', 'password_ph': 'Password', 'connect_btn': 'Connect', 'lang_tag': 'Language',
         'role_tag': 'Role', 'days': 'days', 'error_auth': 'Auth Error: Manual login only.', 'error_manual_login': 'Incorrect credentials.',
         'contact': '✉️ Contact', 'messages': '📩 Messages',
-        'error_not_autopatrolled': "Access denied: your Vikidia account does not have Autopatrolled status (or higher) on any supported language edition."
+        'error_not_autopatrolled': "Access denied: your Vikidia account does not have Autopatrolled status (or higher) on any supported language edition.",
+        'promoted_msg': "✅ Autopatrolled status detected: you are now a Collaborator. Script started.",
+        'error_wiki_check_failed': "Verification unavailable right now: some Vikidia wikis did not respond. Please try again shortly.",
+        'launch_hint': "Launching is reserved for Collaborators. When you click START, your Autopatrolled status is checked on Vikidia: if found, you automatically become a Collaborator."
     }
 }
 

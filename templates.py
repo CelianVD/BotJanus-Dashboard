@@ -120,12 +120,11 @@ DASHBOARD_HTML = """
             {% endif %}
         {% else %}
             {% if session.get('user_id') %}
-                {# Le rôle stocké en base ne suffit pas à décider : un compte "None" peut
-                   quand même lancer un script s'il est autopatrolleur/patrouilleur/admin/
-                   bureaucrate sur au moins un wiki Vikidia. Ce contrôle live est refait
-                   côté serveur dans dashboard.start_script (voir wiki_auth.is_autopatrolled_anywhere).
-                   On affiche donc le formulaire à tout utilisateur connecté ; un refus
-                   éventuel remonte via flash() après la tentative de lancement. #}
+                {# Tout utilisateur connecté VOIT l'interface de lancement (y compris rôle None).
+                   Seuls Collaborateur/Admin peuvent réellement lancer : pour un None, la
+                   vérification autopatrol multi-wikis est faite côté serveur au clic sur
+                   DÉMARRER (dashboard.start_script) ; si elle réussit, il est promu
+                   Collaborateur en base et le script part. Sinon : message via flash(). #}
                 {% if locked == '1' and role != 'Admin' %}
                     <div style="background: rgba(255,0,0,0.2); padding: 15px; border-radius: 10px;">{{ t('locked_msg') }}</div>
                 {% else %}
@@ -144,6 +143,9 @@ DASHBOARD_HTML = """
                         </select>
                         <button class="btn btn-action" type="button" onclick="handleStart()">{{ t('btn_start') }}</button>
                     </form>
+                    {% if role not in ['Collaborateur', 'Admin'] %}
+                        <p style="font-size:0.85em; opacity:0.8; margin-top:10px;">ℹ️ {{ t('launch_hint') }}</p>
+                    {% endif %}
                 {% endif %}
             {% else %}
                 <p><em>{{ t('login_required') }}</em></p>

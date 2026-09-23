@@ -13,3 +13,4 @@ user-password.py
 !.gitignore
 __pycache__/
 __pycache__/
+logs_vikidia_auth.txt

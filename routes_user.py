@@ -3,6 +3,7 @@ import io
 import csv
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -13,15 +14,47 @@ import wiki_auth
 from flask_app import (MANUAL_ADMIN_ID, MANUAL_ADMIN_USERNAME, MANUAL_LOGIN_ID, MANUAL_LOGIN_PASS,
                   WIKI_ROOT_ADMIN_USERNAME,
                   ROLE_NONE, ROLE_COLLAB, ROLE_ADMIN, RECAPTCHA_SITE_KEY, BOTS_DIR,
-                  get_db, get_text, verify_recaptcha, get_all_bots, get_script_status,
+                  get_db, get_text, log_to_db, verify_recaptcha, get_all_bots, get_script_status,
                   login_required, check_role, require_api_key, csrf, status,
                   launch_script_core, stop_current_script)
 from templates import (GLASS_CSS, GATE_HTML, LOGIN_MANUAL_HTML, ACCOUNT_HTML,
                         DASHBOARD_HTML, HISTORY_HTML)
 
+_alog = wiki_auth.log_auth  # journal logs_vikidia_auth.txt
+
 auth_bp = Blueprint("auth", __name__)
 dashboard_bp = Blueprint("dashboard", __name__)
 api_bp = Blueprint("api", __name__)
+
+
+# ============================================================
+# PROMOTION AUTOMATIQUE (None -> Collaborateur via statut autopatrol)
+# ============================================================
+
+def _try_auto_promote(db, user):
+    """Appelée quand un compte de rôle "None" tente de LANCER un script (web ou Discord).
+
+    Interroge les wikis Vikidia (arrêt dès le premier wiki qualifiant). Si le statut
+    autopatrolled (ou supérieur) est trouvé, le rôle est passé à Collaborateur EN BASE :
+    la promotion est définitive (un admin peut ensuite la retirer à la main).
+
+    Renvoie : 'already' | 'promoted' | 'denied' | 'unverifiable'
+    """
+    if user['role'] in (ROLE_COLLAB, ROLE_ADMIN):
+        return 'already'
+    _alog(f"PROMOTION : vérification demandée pour {user['username']!r} (id={user['wiki_id']}, rôle actuel={user['role']})")
+    wiki_code, incomplete = wiki_auth.find_autopatrol_wiki(user['username'])
+    if wiki_code:
+        db.execute("UPDATE users SET role = ? WHERE wiki_id = ? AND role NOT IN (?, ?)",
+                   (ROLE_COLLAB, user['wiki_id'], ROLE_COLLAB, ROLE_ADMIN))
+        db.commit()
+        log_to_db("SYSTEM", f"{user['username']} promu {ROLE_COLLAB} automatiquement "
+                            f"(autopatrol sur {wiki_code}.vikidia.org)")
+        _alog(f"PROMOTION : {user['username']!r} -> {ROLE_COLLAB} ENREGISTRÉ en base (via {wiki_code}.vikidia.org)")
+        return 'promoted'
+    outcome = 'unverifiable' if incomplete else 'denied'
+    _alog(f"PROMOTION : {user['username']!r} NON promu -> {outcome}")
+    return outcome
 
 
 # ============================================================
@@ -88,60 +121,86 @@ def manual_login_post():
 
 @auth_bp.route("/login")
 def login_wiki():
-    # Si une liaison Discord est en cours (voir /discord/link/<token>), on la garde
-    # en session le temps du round-trip OAuth pour la reprendre après connexion.
+    # (Une éventuelle liaison Discord en cours reste dans la session pendant le
+    # round-trip OAuth : voir callback_wiki.)
     verifier, challenge = wiki_auth.generate_pkce_pair()
     state = secrets.token_urlsafe(24)
     session['wiki_oauth_state'] = state
     session['wiki_oauth_verifier'] = verifier
+    _alog("LOGIN : redirection vers Vikidia OAuth")
     return redirect(wiki_auth.build_authorize_url(state, challenge))
 
 
 @auth_bp.route("/oauth/wiki/callback")
 @csrf.exempt
 def callback_wiki():
-    code = request.args.get('code')
-    state = request.args.get('state')
     expected_state = session.pop('wiki_oauth_state', None)
     verifier = session.pop('wiki_oauth_verifier', None)
 
+    # L'utilisateur a refusé l'autorisation (ou le wiki a renvoyé une erreur).
+    if request.args.get('error'):
+        _alog(f"CALLBACK : erreur renvoyée par Vikidia | error={request.args.get('error')!r} "
+              f"| description={request.args.get('error_description')!r}")
+        flash("Connexion Vikidia annulée ou refusée.")
+        return redirect(url_for('dashboard.index'))
+
+    code = request.args.get('code')
+    state = request.args.get('state')
     if not code or not state or not verifier or state != expected_state:
+        _alog(f"CALLBACK : état invalide | code_présent={bool(code)} state_présent={bool(state)} "
+              f"verifier_en_session={bool(verifier)} state_identique={state == expected_state} "
+              "(cookie de session perdu ? SESSION_COOKIE_SECURE / domaine ?)")
         flash("Échec de la connexion Vikidia (état invalide).")
         return redirect(url_for('dashboard.index'))
 
     token_data = wiki_auth.exchange_code_for_token(code, verifier)
     if not token_data:
+        _alog("CALLBACK : échange du code impossible (voir ligne OAUTH token ci-dessus)")
         flash("Échec de la connexion Vikidia (échange du code impossible).")
         return redirect(url_for('dashboard.index'))
 
     profile = wiki_auth.fetch_profile(token_data['access_token'])
     if not profile:
+        _alog("CALLBACK : profil introuvable (voir ligne OAUTH profil ci-dessus)")
         flash("Échec de la connexion Vikidia (profil introuvable).")
         return redirect(url_for('dashboard.index'))
 
     wiki_id = str(profile.get('sub') or profile.get('id') or profile['username'])
     username = profile['username']
-    avatar_url = f"https://ui-avatars.com/api/?name={username}&background=0093E9&color=fff"
+    avatar_url = f"https://ui-avatars.com/api/?name={quote(username)}&background=0093E9&color=fff"
+    is_root_admin = (username == WIKI_ROOT_ADMIN_USERNAME)
 
     db = get_db()
-    existing_user = db.execute("SELECT * FROM users WHERE wiki_id = ?", (wiki_id,)).fetchone()
-    role, lang = ROLE_NONE, 'fr'
-    if username == WIKI_ROOT_ADMIN_USERNAME:
-        role = ROLE_ADMIN
+    existing = db.execute("SELECT * FROM users WHERE wiki_id = ?", (wiki_id,)).fetchone()
 
-    if existing_user:
-        role, lang = existing_user['role'], existing_user['lang'] or 'fr'
-        if existing_user['is_banned']:
-            flash(f"Compte banni. Raison : {existing_user['ban_reason'] or 'Non spécifiée'}")
+    if existing:
+        if existing['is_banned']:
+            _alog(f"CALLBACK : connexion REFUSÉE, compte banni | {username!r} (id={wiki_id})")
+            flash(f"Compte banni. Raison : {existing['ban_reason'] or 'Non spécifiée'}")
             return redirect(url_for('dashboard.index'))
-
-    db.execute("""INSERT OR REPLACE INTO users (wiki_id, username, avatar, role, is_banned, lang, ban_reason, discord_id)
-                  VALUES (?, ?, ?, ?, COALESCE((SELECT is_banned FROM users WHERE wiki_id=?), 0), ?,
-                          (SELECT ban_reason FROM users WHERE wiki_id=?),
-                          (SELECT discord_id FROM users WHERE wiki_id=?))""",
-               (wiki_id, username, avatar_url, role, wiki_id, lang, wiki_id, wiki_id))
+        # Le rôle existant est CONSERVÉ (y compris une promotion automatique passée).
+        # Seul l'admin racine est toujours ré-imposé Admin. UPDATE plutôt que
+        # INSERT OR REPLACE : on ne touche ni à ban_reason ni à discord_id.
+        role = ROLE_ADMIN if is_root_admin else existing['role']
+        lang = existing['lang'] or 'fr'
+        db.execute("UPDATE users SET username = ?, avatar = ?, role = ? WHERE wiki_id = ?",
+                   (username, avatar_url, role, wiki_id))
+    else:
+        # Première connexion : "None" (la promotion se fera au premier lancement).
+        role = ROLE_ADMIN if is_root_admin else ROLE_NONE
+        lang = 'fr'
+        db.execute("""INSERT INTO users (wiki_id, username, avatar, role, is_banned, lang)
+                      VALUES (?, ?, ?, ?, 0, ?)""",
+                   (wiki_id, username, avatar_url, role, lang))
     db.commit()
+    _alog(f"CALLBACK : connexion RÉUSSIE | {username!r} (id={wiki_id}) | rôle={role} "
+          f"| {'nouveau compte' if not existing else 'compte existant'}{' | admin racine' if is_root_admin else ''}")
 
+    # Nouvelle session (anti-fixation), en gardant ce qui doit survivre au login.
+    keep = {k: session[k] for k in ('captcha_passed', 'pending_discord_link') if k in session}
+    session.clear()
+    session.update(keep)
+    session.permanent = True  # applique PERMANENT_SESSION_LIFETIME (60 min)
     session['user_id'], session['username'], session['lang'] = wiki_id, username, lang
 
     # Reprise d'une liaison Discord démarrée avant la connexion (/discord/link/<token>).
@@ -234,45 +293,88 @@ def index():
 @dashboard_bp.route("/start", methods=["POST"])
 @login_required
 def start_script():
+    """Lancement d'un script.
+
+    Seuls Collaborateur/Admin peuvent lancer. Un compte "None" voit l'interface, mais
+    c'est ICI, au clic sur DÉMARRER, que l'on vérifie son statut autopatrol sur les
+    wikis : trouvé -> promu Collaborateur (persisté) ET lancement accepté.
+    Les contrôles peu coûteux passent d'abord, la vérification réseau en dernier.
+    """
     db = get_db()
-    locked_val = db.execute("SELECT value FROM settings WHERE key='lock_launch'").fetchone()['value']
+    lock_row = db.execute("SELECT value FROM settings WHERE key='lock_launch'").fetchone()
+    locked_val = lock_row['value'] if lock_row else '0'
     user = db.execute("SELECT * FROM users WHERE wiki_id=?", (session['user_id'],)).fetchone()
 
+    # 1. Compte
     if not user or user['is_banned']:
+        _alog(f"START : refusé, compte introuvable ou banni | session user_id={session.get('user_id')!r}")
+        session.clear()
         flash("Compte banni.")
         return redirect(url_for('dashboard.index'))
+    is_admin = user['role'] == ROLE_ADMIN
+    choice = request.form.get("choice") or ""
+    _alog(f"START : demande de {user['username']!r} (id={user['wiki_id']}, rôle={user['role']}) "
+          f"| script={choice!r} | verrou={locked_val}")
 
-    if user['role'] not in (ROLE_COLLAB, ROLE_ADMIN):
-        # Rôle "None" : vérification en direct du statut Autopatrolleur sur au moins
-        # une des versions linguistiques de Vikidia prises en charge. Aucune promotion
-        # de rôle n'est enregistrée en base : le contrôle est refait à chaque lancement.
-        if not wiki_auth.is_autopatrolled_anywhere(user['username']):
-            flash(get_text('error_not_autopatrolled'))
-            return redirect(url_for('dashboard.index'))
-
-    if locked_val == '1' and user['role'] != ROLE_ADMIN:
+    # 2. Verrou global (admins seulement) : avant toute vérification wiki, pour qu'un
+    #    lancement bloqué ne provoque aucune promotion.
+    if locked_val == '1' and not is_admin:
+        _alog("START : refusé, lancement verrouillé par l'admin (aucune vérification wiki)")
         flash("Verrouillé par l'Admin.")
         return redirect(url_for('dashboard.index'))
 
-    if not status["running"]:
-        choice = request.form.get("choice")
-        p = os.path.join(BOTS_DIR, choice)
+    # 3. Un script tourne déjà ?
+    if status["running"]:
+        _alog("START : refusé, un script est déjà en cours")
+        flash("Un script est déjà en cours d'exécution.")
+        return redirect(url_for('dashboard.index'))
 
-        if user['role'] != ROLE_ADMIN and get_script_status(choice) == 0:
-            flash("Ce script a été désactivé par l'administrateur.")
+    # 4. Script demandé : doit exister dans BOTS_DIR (bloque le path traversal / None)
+    if choice not in get_all_bots():
+        _alog(f"START : refusé, script introuvable dans BOTS_DIR : {choice!r}")
+        flash("Script introuvable.")
+        return redirect(url_for('dashboard.index'))
+    if not is_admin and get_script_status(choice) == 0:
+        _alog(f"START : refusé, script désactivé par l'admin : {choice!r}")
+        flash("Ce script a été désactivé par l'administrateur.")
+        return redirect(url_for('dashboard.index'))
+
+    # 5. Arguments du script Portail
+    cmd_args = []
+    if "portal.py" in choice or choice == "Portail":
+        arg_lang = request.form.get("arg_lang")
+        arg_cat = request.form.get("arg_cat")
+        arg_portal = request.form.get("arg_portal")
+        if not (arg_lang and arg_cat and arg_portal):
+            _alog("START : refusé, paramètres du portail manquants")
+            flash("Paramètres du portail manquants.")
+            return redirect(url_for('dashboard.index'))
+        cmd_args = ["--lang", arg_lang, "--cat", arg_cat, "--portal", arg_portal]
+
+    # 6. Droit de lancer : rôle "None" -> vérification wiki + promotion automatique
+    promoted = False
+    if user['role'] not in (ROLE_COLLAB, ROLE_ADMIN):
+        outcome = _try_auto_promote(db, user)
+        if outcome == 'promoted':
+            promoted = True
+        elif outcome == 'unverifiable':
+            _alog("START : refusé, vérification wiki incomplète (message 'réessayez' affiché)")
+            flash(get_text('error_wiki_check_failed'))
+            return redirect(url_for('dashboard.index'))
+        else:
+            _alog("START : refusé, aucun statut autopatrol trouvé")
+            flash(get_text('error_not_autopatrolled'))
             return redirect(url_for('dashboard.index'))
 
-        if os.path.exists(p):
-            cmd_args = []
-            if "portal.py" in choice or choice == "Portail":
-                arg_lang = request.form.get("arg_lang")
-                arg_cat = request.form.get("arg_cat")
-                arg_portal = request.form.get("arg_portal")
-                if not (arg_lang and arg_cat and arg_portal):
-                    return redirect(url_for('dashboard.index'))
-                cmd_args = ["--lang", arg_lang, "--cat", arg_cat, "--portal", arg_portal]
-
-            launch_script_core(choice, p, args=cmd_args, user_name=session.get('username'))
+    # 7. Lancement
+    p = os.path.join(BOTS_DIR, choice)
+    if launch_script_core(choice, p, args=cmd_args, user_name=session.get('username')):
+        _alog(f"START : script {choice!r} LANCÉ pour {user['username']!r}{' (après promotion auto)' if promoted else ''}")
+        if promoted:
+            flash(get_text('promoted_msg'))
+    else:
+        _alog(f"START : échec du lancement de {choice!r}")
+        flash("Impossible de lancer le script (un processus est déjà actif ou erreur de démarrage).")
     return redirect(url_for("dashboard.index"))
 
 
@@ -529,11 +631,14 @@ def api_discord_permissions():
         return jsonify({"linked": True, "authorized": True, "role": user['role'],
                          "username": user['username']})
 
-    # Rôle "None" lié : même règle que sur le dashboard web, vérification en direct
-    # (aucune promotion de rôle enregistrée).
-    if wiki_auth.is_autopatrolled_anywhere(user['username']):
-        return jsonify({"linked": True, "authorized": True, "role": ROLE_NONE,
+    _alog(f"DISCORD permissions : demande pour discord_id={discord_id} -> {user['username']!r} (rôle={user['role']})")
+    # Rôle "None" lié : même règle que sur le dashboard web (vérification wiki au moment
+    # de la demande de lancement, arrêt au premier wiki qualifiant, promotion persistée).
+    outcome = _try_auto_promote(db, user)
+    if outcome == 'promoted':
+        return jsonify({"linked": True, "authorized": True, "role": ROLE_COLLAB,
                          "via": "autopatrol", "username": user['username']})
 
+    # "retry": les wikis n'ont pas tous répondu -> le bot peut proposer de réessayer.
     return jsonify({"linked": True, "authorized": False, "reason": "not_autopatrolled",
-                     "username": user['username']})
+                     "retry": outcome == 'unverifiable', "username": user['username']})
