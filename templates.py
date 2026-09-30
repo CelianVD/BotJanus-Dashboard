@@ -1,3 +1,4 @@
+# Structure :
 #   1. GLASS_CSS   : <link> polices + script thème + feuille de style globale
 #                    (nom conservé : les routes passent glass_css=GLASS_CSS)
 #   2. Briques     : icônes SVG, barre d'onglets (NAV_FULL / NAV_BARE), JS commun
@@ -143,6 +144,10 @@ GLASS_CSS = r"""
         backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
         padding: 36px 34px; margin-bottom: 20px; box-shadow: 0 16px 40px rgba(0,0,0,.10);
     }
+    .card, .msg-card, .modal-content { overflow-wrap: break-word; word-wrap: break-word; min-width: 0; }
+    .card > *, .flex-row > *, .row > *, .field-row > *, .status > * { min-width: 0; }
+    p, li, td, th, label, .msg-body, .status-text, .hint, .notice { overflow-wrap: break-word; }
+    select, input, textarea { max-width: 100%; text-overflow: ellipsis; }
     .card.tight { padding: 26px 28px; }
     .card.center-text { text-align: center; }
 
@@ -170,7 +175,7 @@ GLASS_CSS = r"""
     .btn {
         text-decoration: none; padding: 15px 28px; font-family: inherit; font-weight: 700; font-size: .8rem;
         text-transform: uppercase; letter-spacing: 1.2px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-        cursor: pointer; border: 1px solid transparent; border-radius: 0; white-space: nowrap; position: relative;
+        cursor: pointer; border: 1px solid transparent; border-radius: 0; white-space: normal; text-align: center; line-height: 1.25; position: relative;
         transition: transform .2s ease, background-color .2s ease, color .2s ease, border-color .2s ease, opacity .2s;
     }
     .btn:hover { transform: translateY(-3px); }
@@ -182,6 +187,7 @@ GLASS_CSS = r"""
     .btn-secondary:hover { background: var(--btn-primary-bg); color: var(--btn-primary-text); }
     .btn-danger { background: transparent; color: var(--err); border-color: var(--err); }
     .btn-danger:hover { background: var(--err); color: #fff; }
+    td .btn, .btn-sm { white-space: nowrap; }
     .btn-sm { padding: 9px 14px; font-size: .7rem; letter-spacing: 1px; }
     .btn-block { width: 100%; }
     .btn[disabled] { opacity: .45; cursor: not-allowed; transform: none; }
@@ -279,7 +285,7 @@ GLASS_CSS = r"""
     @keyframes tbar { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
     /* ---------- Mobile ---------- */
-    @media (max-width: 900px) { .brand span { display: none; } }
+    @media (max-width: 900px) { .brand span { display: none; } .tab:not(.active) .lbl { display: none; } .tab { padding: 0 16px; } }
     @media (max-width: 760px) {
         .topbar { grid-template-columns: 1fr auto; gap: 8px; padding: 8px 12px; }
         .brand { display: none; }
@@ -509,8 +515,14 @@ _DASH_BODY = r"""
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                 <button class="btn btn-danger" type="submit">{{ t('btn_stop') }}</button>
             </form>
-        {% else %}
+        {% elif session.get('user_id') %}
             <p>{{ t('script_running') }}</p>
+        {% else %}
+            <p style="margin-bottom:22px;">{{ t('script_running') }} {{ t('login_required') }}</p>
+            <div class="row stack-mobile">
+                <a href="{{ url_for('auth.login_wiki') }}" class="btn btn-primary">{{ t('login_wiki') }}</a>
+                <a href="{{ url_for('auth.manual_login_page') }}" class="btn btn-secondary">{{ t('login_manual') }}</a>
+            </div>
         {% endif %}
     {% else %}
         {% if session.get('user_id') %}
