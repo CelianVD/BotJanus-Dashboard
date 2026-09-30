@@ -100,6 +100,7 @@ TRANSLATIONS = {
         'connect_btn': 'Se connecter', 'lang_tag': 'Langue', 'role_tag': 'Rôle', 'days': 'jours',
         'error_auth': 'Erreur d\'authentification : Réservé à la connexion manuelle.', 'error_manual_login': 'Identifiants incorrects.',
         'contact': '✉️ Contact', 'messages': '📩 Messages',
+        'nav_home': 'Accueil', 'nav_logs': 'Logs', 'nav_account': 'Mon compte', 'nav_admin': 'Administration', 'nav_logout': 'Quitter', 'nav_login': 'Connexion',
         'error_not_autopatrolled': "Accès refusé : votre compte Vikidia n'a pas le statut Autopatrolleur (ou supérieur) sur une des versions linguistiques prises en charge.",
         'promoted_msg': "✅ Statut Autopatrolleur détecté : vous êtes désormais Collaborateur. Script lancé.",
         'error_wiki_check_failed': "Vérification impossible pour le moment : certains wikis Vikidia n'ont pas répondu. Réessayez dans un instant.",
@@ -117,6 +118,7 @@ TRANSLATIONS = {
         'username_ph': 'Username', 'password_ph': 'Password', 'connect_btn': 'Connect', 'lang_tag': 'Language',
         'role_tag': 'Role', 'days': 'days', 'error_auth': 'Auth Error: Manual login only.', 'error_manual_login': 'Incorrect credentials.',
         'contact': '✉️ Contact', 'messages': '📩 Messages',
+        'nav_home': 'Home', 'nav_logs': 'Logs', 'nav_account': 'My account', 'nav_admin': 'Administration', 'nav_logout': 'Log out', 'nav_login': 'Sign in',
         'error_not_autopatrolled': "Access denied: your Vikidia account does not have Autopatrolled status (or higher) on any supported language edition.",
         'promoted_msg': "✅ Autopatrolled status detected: you are now a Collaborator. Script started.",
         'error_wiki_check_failed': "Verification unavailable right now: some Vikidia wikis did not respond. Please try again shortly.",
@@ -438,15 +440,19 @@ def create_app():
     @app.context_processor
     def inject_globals():
         unread_messages = 0
+        nav_role, nav_username, nav_avatar = None, None, None
         if session.get('user_id'):
             try:
                 db = get_db()
-                user = db.execute("SELECT role FROM users WHERE wiki_id=?", (session['user_id'],)).fetchone()
-                if user and user['role'] == ROLE_ADMIN:
-                    unread_messages = get_unread_messages_count()
+                user = db.execute("SELECT role, username, avatar FROM users WHERE wiki_id=?", (session['user_id'],)).fetchone()
+                if user:
+                    nav_role, nav_username, nav_avatar = user['role'], user['username'], user['avatar']
+                    if user['role'] == ROLE_ADMIN:
+                        unread_messages = get_unread_messages_count()
             except Exception:
                 unread_messages = 0
-        return dict(t=get_text, current_lang=session.get('lang', 'fr'), unread_messages=unread_messages)
+        return dict(t=get_text, current_lang=session.get('lang', 'fr'), unread_messages=unread_messages,
+                    nav_role=nav_role, nav_username=nav_username, nav_avatar=nav_avatar)
 
     return app
 

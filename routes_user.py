@@ -15,7 +15,7 @@ from flask_app import (MANUAL_ADMIN_ID, MANUAL_ADMIN_USERNAME, MANUAL_LOGIN_ID, 
                   WIKI_ROOT_ADMIN_USERNAME,
                   ROLE_NONE, ROLE_COLLAB, ROLE_ADMIN, RECAPTCHA_SITE_KEY, BOTS_DIR,
                   get_db, get_text, log_to_db, verify_recaptcha, get_all_bots, get_script_status,
-                  login_required, check_role, require_api_key, csrf, status,
+                  login_required, check_role, require_api_key, csrf, status, get_unread_messages_count,
                   launch_script_core, stop_current_script)
 from templates import (GLASS_CSS, GATE_HTML, LOGIN_MANUAL_HTML, ACCOUNT_HTML,
                         DASHBOARD_HTML, HISTORY_HTML)
@@ -520,7 +520,10 @@ def status_json():
         "running": status["running"],
         "script_name": status.get("script_name") or "Inactif",
         "locked": locked,
-        "role": user_role
+        "role": user_role,
+        "logged_in": 'user_id' in session,
+        # Utilisé par les notifications toast (toutes pages) : admins uniquement
+        "unread": get_unread_messages_count() if user_role == ROLE_ADMIN else 0
     })
 
 
