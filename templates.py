@@ -501,6 +501,7 @@ def _page(title, body, tab=None, nav="full", wide="", poll=True, extra_head="", 
         '  <meta charset="UTF-8">\n'
         '  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
         '  <title>' + title + '</title>\n'
+        '  <link rel="icon" type="image/jpeg" href="{{ url_for(\'static\', filename=\'avatar_botjanus.jpeg\') }}">\n'
         '  {{ glass_css|safe }}\n' + extra_head + '\n</head>\n'
         '<body' + ('' if poll else ' data-poll="off"') + '>\n' + tab_line + '\n'
         + BACKGROUND + '\n' + (NAV_FULL if nav == "full" else NAV_BARE) + '\n'
