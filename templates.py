@@ -307,6 +307,21 @@ GLASS_CSS = r"""
         .stack-mobile > * { width: 100%; }
         .stack-mobile .btn { width: 100%; }
     }
+
+    /* ---------- Scripts continus (état de santé) ---------- */
+    .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: stretch; margin-bottom: 20px; }
+    .cards-grid > .card { margin-bottom: 0; padding: 28px 26px; }
+    @media (max-width: 760px) { .cards-grid { grid-template-columns: 1fr; } }
+    .svc-item { padding: 14px 0; border-bottom: 1px solid var(--card-border); }
+    .svc-item:first-child { padding-top: 0; }
+    .svc-item:last-child { border-bottom: 0; padding-bottom: 0; }
+    .svc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .svc-name { font-weight: 700; }
+    .svc-meta { font-size: .8rem; color: var(--text-muted); margin-top: 5px; line-height: 1.5; }
+    .svc-err { font-size: .76rem; margin-top: 6px; color: var(--err); font-family: 'JetBrains Mono', 'Courier New', monospace; word-break: break-word; }
+    .svc-actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .tag-warn { border-color: var(--warn); color: var(--warn); }
+    .tag-muted { color: var(--text-muted); }
 </style>
 """
 
@@ -498,9 +513,14 @@ def _page(title, body, tab=None, nav="full", wide="", poll=True, extra_head="", 
 # 3. PAGES
 # ------------------------------------------------------------
 _DASH_BODY = r"""
-  <section class="card">
+  <div style="padding:0 4px 10px;">
     <span class="badge-header">{{ t('nav_home') }}</span>
-    <h1 class="hero-title">Bot<span class="text-gradient">Janus</span></h1>
+    <h1 class="hero-title" style="margin-bottom:6px;">Bot<span class="text-gradient">Janus</span></h1>
+  </div>
+
+  <div class="cards-grid">
+  <section class="card">
+    <span class="badge-header">{{ t('card_temp') }}</span>
 
     <div class="status">
       <span class="dot {{ 'on' if running }}"></span>
@@ -563,6 +583,15 @@ _DASH_BODY = r"""
   </section>
 
   <section class="card">
+    <span class="badge-header">{{ t('card_cont') }}</span>
+    <div id="contList"><p class="small">…</p></div>
+    {% if role == 'Admin' %}
+        <a href="{{ url_for('services.admin_services') }}" class="btn btn-secondary btn-sm" style="margin-top:18px;">{{ t('manage') }}</a>
+    {% endif %}
+  </section>
+  </div>
+
+  <section class="card">
     <div class="flex-row" style="margin-bottom:16px;">
         <h3 style="margin:0;">{{ t('console') }}</h3>
         <a href="{{ url_for('dashboard.history') }}" class="btn btn-secondary btn-sm">{{ t('history')|replace('📂 ', '') }}</a>
@@ -614,6 +643,41 @@ _DASH_JS = r"""
     // Notifications navigateur (fin de script), demandées uniquement aux utilisateurs connectés
     if (window.Notification && Notification.permission === "default") { Notification.requestPermission(); }
     {% endif %}
+
+
+    /* ---- Carte "scripts continus" ---- */
+    var SVC_LABELS = {ok: "En marche", degraded: "Dégradé", down: "Hors service", stopped: "Arrêté"};
+    var SVC_CLS = {ok: "tag-ok", degraded: "tag-warn", down: "tag-err", stopped: "tag-muted"};
+    function fmtDur(sec) {
+        if (sec == null) return "—";
+        var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+        return d ? d + " j " + h + " h" : h ? h + " h " + m + " min" : m + " min";
+    }
+    function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+    function renderServices(res) {
+        var box = document.getElementById("contList");
+        if (!box) return;
+        box.textContent = "";
+        if (!res.reachable) { box.appendChild(el("div", "notice", res.error || "Serveur distant injoignable.")); return; }
+        if (!res.services.length) { box.appendChild(el("p", "small", "Aucun script continu configuré.")); return; }
+        res.services.forEach(function (s) {
+            var item = el("div", "svc-item"), head = el("div", "svc-head");
+            head.appendChild(el("span", "svc-name", s.label));
+            head.appendChild(el("span", "tag " + (SVC_CLS[s.health] || ""), SVC_LABELS[s.health] || s.health));
+            item.appendChild(head);
+            var parts = [s.health_reason];
+            if (s.running) parts.push("actif depuis " + fmtDur(s.uptime_s));
+            if (s.heartbeat_age_s != null) parts.push("dernière activité il y a " + fmtDur(s.heartbeat_age_s));
+            item.appendChild(el("div", "svc-meta", parts.join(" · ")));
+            if (res.is_admin && s.last_error) item.appendChild(el("div", "svc-err", (s.last_error.time || "") + " " + s.last_error.message));
+            box.appendChild(item);
+        });
+    }
+    function refreshServices() {
+        fetch("/api/services/status").then(function (r) { return r.json(); }).then(renderServices)
+            .catch(function () { renderServices({reachable: false, error: "Dashboard injoignable."}); });
+    }
+    refreshServices(); setInterval(refreshServices, 10000);
 
     function handleStart() {
         var choice = document.getElementById('scriptSelect').value;
@@ -708,6 +772,7 @@ ADMIN_NAV = r"""
     <a href="{{ url_for('admin.admin_users') }}" class="subtab {{ 'active' if active == 'users' }}">Utilisateurs</a>
     <a href="{{ url_for('admin.admin_scripts') }}" class="subtab {{ 'active' if active == 'scripts' }}">Scripts</a>
     <a href="{{ url_for('admin.admin_schedules') }}" class="subtab {{ 'active' if active == 'schedules' }}">Planification</a>
+    <a href="{{ url_for('services.admin_services') }}" class="subtab {{ 'active' if active == 'services' }}">Scripts continus</a>
     <a href="{{ url_for('admin.admin_stats') }}" class="subtab {{ 'active' if active == 'stats' }}">Statistiques</a>
     <a href="{{ url_for('admin.settings') }}" class="subtab {{ 'active' if active == 'settings' }}">Système</a>
     <a href="{{ url_for('contact.admin_messages') }}" class="subtab {{ 'active' if active == 'messages' }}" style="padding-right:34px;">Messages
@@ -1003,3 +1068,121 @@ HISTORY_HTML = _page("{{ t('history')|replace('📂 ', '') }}", r"""
     </div>
   </section>
 """, tab="logs", wide="wide")
+
+
+_SVC_ADMIN_JS = r"""
+<script>
+    var CSRF = document.querySelector('meta[name="csrf-token"]').content;
+    var LABELS = {ok: "En marche", degraded: "Dégradé", down: "Hors service", stopped: "Arrêté"};
+    var CLS = {ok: "tag-ok", degraded: "tag-warn", down: "tag-err", stopped: "tag-muted"};
+    var ACT_LABEL = {start: "démarrage", stop: "arrêt", restart: "relance"};
+    var logTimer = null, logId = null, sending = false, watching = {};
+
+    function fmtDur(sec) {
+        if (sec == null) return "—";
+        var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+        return d ? d + " j " + h + " h" : h ? h + " h " + m + " min" : m + " min";
+    }
+    function mk(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+    function act(id, action) {
+        if (sending) return;
+        if (action === "stop" && !confirm("Arrêter ce script ? Il ne sera pas relancé automatiquement.")) return;
+        sending = true;
+        fetch("/admin/services/" + encodeURIComponent(id) + "/" + action, {method: "POST", headers: {"X-CSRFToken": CSRF}})
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (j.ok) { watching[j.command_id] = action; window.toast(j.message, {type: "info", title: "Ordre envoyé"}); }
+                else window.toast(j.message || "Erreur.", {type: "error"});
+            })
+            .catch(function () { window.toast("Erreur réseau.", {type: "error"}); })
+            .finally(function () { sending = false; load(); });
+    }
+
+    function checkResults(services) {
+        services.forEach(function (s) {
+            var c = s.last_command;
+            if (!c || !(c.id in watching)) return;
+            if (c.status === "done") { window.toast(s.label + " : " + (ACT_LABEL[c.action] || c.action) + " effectué. " + (c.result || ""), {type: "success"}); delete watching[c.id]; }
+            else if (c.status === "failed" || c.status === "expired") { window.toast(s.label + " : " + (c.result || "échec"), {type: "error"}); delete watching[c.id]; }
+        });
+    }
+
+    function render(res) {
+        var box = document.getElementById("svcAdminList"); box.textContent = "";
+        document.getElementById("svcStamp").textContent = res.last_contact_age_s != null ? "agent vu il y a " + res.last_contact_age_s + " s" : "";
+        if (!res.reachable) { box.appendChild(mk("div", "notice", res.error)); return; }
+        if (!res.services.length) { box.appendChild(mk("p", "small", "Aucun script continu configuré.")); return; }
+        checkResults(res.services);
+        res.services.forEach(function (s) {
+            var it = mk("div", "svc-item"), head = mk("div", "svc-head");
+            head.appendChild(mk("span", "svc-name", s.label));
+            head.appendChild(mk("span", "tag " + (CLS[s.health] || ""), LABELS[s.health] || s.health));
+            if (s.pending_action) head.appendChild(mk("span", "tag tag-warn", "⏳ " + (ACT_LABEL[s.pending_action] || s.pending_action) + " en cours"));
+            it.appendChild(head);
+            if (s.description) it.appendChild(mk("div", "svc-meta", s.description));
+            var m = [s.health_reason];
+            if (s.running) {
+                m.push("PID " + s.pid, "actif depuis " + fmtDur(s.uptime_s));
+                if (s.memory_mb != null) m.push(s.memory_mb + " Mo");
+                if (s.cpu_percent != null) m.push(s.cpu_percent + " % CPU");
+            }
+            if (s.heartbeat_age_s != null) m.push("dernière activité il y a " + fmtDur(s.heartbeat_age_s));
+            m.push("redémarrages : " + s.restarts);
+            if (s.errors_last_hour) m.push(s.errors_last_hour + " erreur(s)/h");
+            it.appendChild(mk("div", "svc-meta", m.join(" · ")));
+            if (s.last_exit) it.appendChild(mk("div", "svc-meta", "Dernière sortie : " + s.last_exit));
+            if (s.last_action) it.appendChild(mk("div", "svc-meta", "Dernière action : " + s.last_action + " (" + s.last_action_by + ")"));
+            if (s.last_error) it.appendChild(mk("div", "svc-err", (s.last_error.time || "") + " " + s.last_error.message));
+            var ac = mk("div", "svc-actions"), lock = !!s.pending_action || sending;
+            [["start", "Démarrer", "btn-primary", !s.running], ["restart", "Relancer", "btn-secondary", true],
+             ["stop", "Arrêter", "btn-danger", s.running]].forEach(function (a) {
+                var b = mk("button", "btn btn-sm " + a[2], a[1]); b.type = "button"; b.disabled = !a[3] || lock;
+                b.onclick = function () { act(s.id, a[0]); }; ac.appendChild(b);
+            });
+            var lb = mk("button", "btn btn-sm btn-secondary", "Journal"); lb.type = "button";
+            lb.onclick = function () { openLogs(s.id, s.label); }; ac.appendChild(lb);
+            it.appendChild(ac); box.appendChild(it);
+        });
+    }
+    function load() {
+        /* watch=1 : prévient le dashboard qu'un admin regarde => l'agent appelle toutes les ~4 s */
+        fetch("/api/services/status?watch=1").then(function (r) { return r.json(); }).then(render)
+            .catch(function () { render({reachable: false, error: "Dashboard injoignable."}); });
+    }
+    function fetchLogs() {
+        fetch("/admin/services/" + encodeURIComponent(logId) + "/logs?lines=150").then(function (r) { return r.json(); }).then(function (j) {
+            var b = document.getElementById("logBox2"), atEnd = b.scrollHeight - b.clientHeight <= b.scrollTop + 50;
+            b.textContent = "";
+            (j.lines && j.lines.length ? j.lines : [j.error || "—"]).forEach(function (l) { b.appendChild(mk("div", null, l)); });
+            if (atEnd) b.scrollTop = b.scrollHeight;
+        }).catch(function () {});
+    }
+    function openLogs(id, label) {
+        logId = id; document.getElementById("logTitle").textContent = "Journal — " + label;
+        document.getElementById("logPanel").hidden = false; fetchLogs();
+        clearInterval(logTimer); logTimer = setInterval(fetchLogs, 4000);
+        document.getElementById("logBox2").scrollTop = 1e9;
+    }
+    function closeLogs() { document.getElementById("logPanel").hidden = true; clearInterval(logTimer); }
+    load(); setInterval(function () { if (!sending) load(); }, 4000);
+</script>
+"""
+
+ADMIN_SERVICES_HTML = _page("Scripts continus - Administration", _admin_head("Scripts continus") + r"""
+  <section class="card">
+    <div class="flex-row" style="margin-bottom:18px;">
+        <h3 style="margin:0;">Serveur distant</h3>
+        <span class="small muted" id="svcStamp"></span>
+    </div>
+    <div id="svcAdminList"></div>
+  </section>
+
+  <section class="card" id="logPanel" hidden>
+    <div class="flex-row" style="margin-bottom:16px;">
+        <h3 style="margin:0;" id="logTitle">Journal</h3>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="closeLogs()">Fermer</button>
+    </div>
+    <div class="console-window" id="logBox2"></div>
+  </section>
+""", tab="admin", extra_head='<meta name="csrf-token" content="{{ csrf_token() }}">', extra_js=_SVC_ADMIN_JS)

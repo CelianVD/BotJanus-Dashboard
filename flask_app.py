@@ -82,6 +82,11 @@ MANUAL_LOGIN_PASS = _require_env('MANUAL_LOGIN_PASS')
 # confondre veut dire qu'une fuite de l'un expose l'autre.
 API_KEY = _require_env('API_KEY')
 
+# --- Scripts "en continu" sur serveur distant (BotJanus Agent, voir routes_services.py) ---
+# C'est l'AGENT qui appelle le dashboard (POST /api/agent/sync) avec ce jeton : aucun port à
+# ouvrir sur le serveur distant. Sans AGENT_TOKEN la fonction est simplement désactivée.
+AGENT_TOKEN = os.environ.get('AGENT_TOKEN', '')  # même valeur que dans le .env de l'agent
+
 ROLE_NONE = "None"
 ROLE_COLLAB = "Collaborateur"
 ROLE_ADMIN = "Admin"
@@ -100,6 +105,7 @@ TRANSLATIONS = {
         'connect_btn': 'Se connecter', 'lang_tag': 'Langue', 'role_tag': 'Rôle', 'days': 'jours',
         'error_auth': 'Erreur d\'authentification : Réservé à la connexion manuelle.', 'error_manual_login': 'Identifiants incorrects.',
         'contact': '✉️ Contact', 'messages': '📩 Messages',
+        'card_temp': 'Scripts temporaires', 'card_cont': 'Scripts continus', 'manage': 'Gérer',
         'nav_home': 'Accueil', 'nav_logs': 'Logs', 'nav_account': 'Mon compte', 'nav_admin': 'Administration', 'nav_logout': 'Quitter', 'nav_login': 'Connexion',
         'error_not_autopatrolled': "Accès refusé : votre compte Vikidia n'a pas le statut Autopatrolleur (ou supérieur) sur une des versions linguistiques prises en charge.",
         'promoted_msg': "✅ Statut Autopatrolleur détecté : vous êtes désormais Collaborateur. Script lancé.",
@@ -118,6 +124,7 @@ TRANSLATIONS = {
         'username_ph': 'Username', 'password_ph': 'Password', 'connect_btn': 'Connect', 'lang_tag': 'Language',
         'role_tag': 'Role', 'days': 'days', 'error_auth': 'Auth Error: Manual login only.', 'error_manual_login': 'Incorrect credentials.',
         'contact': '✉️ Contact', 'messages': '📩 Messages',
+        'card_temp': 'Temporary scripts', 'card_cont': 'Continuous scripts', 'manage': 'Manage',
         'nav_home': 'Home', 'nav_logs': 'Logs', 'nav_account': 'My account', 'nav_admin': 'Administration', 'nav_logout': 'Log out', 'nav_login': 'Sign in',
         'error_not_autopatrolled': "Access denied: your Vikidia account does not have Autopatrolled status (or higher) on any supported language edition.",
         'promoted_msg': "✅ Autopatrolled status detected: you are now a Collaborator. Script started.",
@@ -201,6 +208,15 @@ def init_db(app):
             msg_cols = {row["name"] for row in db.execute("PRAGMA table_info(messages)")}
             if "github_id" in msg_cols and "wiki_id" not in msg_cols:
                 db.execute("ALTER TABLE messages RENAME COLUMN github_id TO wiki_id")
+            # Scripts continus (agent distant qui appelle le dashboard, voir routes_services.py)
+            db.execute('''CREATE TABLE IF NOT EXISTS agent_snapshot (
+                            id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT, logs TEXT,
+                            updated_at REAL, watch_until REAL DEFAULT 0)''')
+            db.execute("INSERT OR IGNORE INTO agent_snapshot (id, data, logs, updated_at) VALUES (1, '[]', '{}', 0)")
+            db.execute('''CREATE TABLE IF NOT EXISTS agent_commands (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT, service_id TEXT, action TEXT,
+                            requested_by TEXT, requested_at REAL, status TEXT DEFAULT 'pending',
+                            result TEXT, done_at REAL)''')
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('lock_launch', '0')")
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('captcha_enabled', '0')")
             db.commit()
@@ -415,16 +431,19 @@ def create_app():
     from routes_user import auth_bp, dashboard_bp, api_bp
     from routes_admin import admin_bp
     from routes_contact import contact_bp
+    from routes_services import services_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(contact_bp)
+    app.register_blueprint(services_bp)
 
     app.teardown_appcontext(close_connection)
 
-    EXEMPT_ENDPOINTS = {'auth.security_gate', 'auth.verify_gate', 'static', 'auth.callback_wiki', 'auth.login_wiki'}
+    EXEMPT_ENDPOINTS = {'auth.security_gate', 'auth.verify_gate', 'static', 'auth.callback_wiki', 'auth.login_wiki',
+                        'services.agent_sync'}  # l'agent distant s'authentifie par jeton, pas par session
 
     @app.before_request
     def check_security_gate():
